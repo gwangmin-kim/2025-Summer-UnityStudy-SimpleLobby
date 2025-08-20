@@ -5,10 +5,13 @@ using UnityEngine.UI;
 
 public class LobbyPlayerSlot : MonoBehaviour {
     [Header("UI Components")]
+    [SerializeField] private Image imageSlotPanel;
     [SerializeField] private TMP_Text textPlayerName;
     [SerializeField] private Button buttonKick;
     public string PlayerId { get; private set; }
 
+    private static float panelAlpha = 0.4f;
+    private static Color colorHost = Color.yellow;
     private static Color colorReady = Color.yellowGreen;
     private static Color colorNotReady = Color.gray;
 
@@ -26,10 +29,15 @@ public class LobbyPlayerSlot : MonoBehaviour {
         buttonKick.gameObject.SetActive(true);
     }
 
-    public void Bind(string playerId, string playerName, bool isPlayerReady, bool canKicked, Action<string> onKick) {
+    public void Bind(string playerId, string playerName, bool isHost, bool isPlayerReady, bool canKicked, Action<string> onKick) {
         PlayerId = playerId;
         textPlayerName.text = playerName;
-        textPlayerName.color = isPlayerReady ? colorReady : colorNotReady;
+
+        Color panelColor = isHost ? colorHost :
+                           isPlayerReady ? colorReady :
+                           colorNotReady;
+        panelColor.a = panelAlpha;
+        imageSlotPanel.color = panelColor;
 
         onKickAction = onKick;
         buttonKick.onClick.RemoveAllListeners();

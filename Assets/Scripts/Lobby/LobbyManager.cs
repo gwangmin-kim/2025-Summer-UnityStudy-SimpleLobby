@@ -5,8 +5,6 @@ using System.Threading.Tasks;
 using System.Text;
 
 using UnityEngine;
-using UnityEngine.UI;
-using TMPro;
 
 using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
@@ -18,34 +16,21 @@ using Unity.Services.Relay;
 using Unity.Services.Relay.Models;
 using Unity.Services.Lobbies;
 using Unity.Services.Lobbies.Models;
+using System.Linq;
+using UnityEngine.SceneManagement;
+using Unity.VisualScripting;
 
+[DefaultExecutionOrder(-1000)]
 public class LobbyManager : MonoBehaviour {
-    public LobbyManager Instance { get; private set; }
+    public static LobbyManager Instance { get; private set; }
 
-    [Header("Left Panel (Find Session)")]
-    [SerializeField] private GameObject leftPanel;
-    // for all players
-    [SerializeField] private TMP_InputField inputPlayerName;
-    // for host
-    [SerializeField] private TMP_InputField inputSessionName;
-    [SerializeField] private TMP_Dropdown dropdownMaxPlayers;
-    [SerializeField] private Button buttonCreateHost;
-    // for clients
-    [SerializeField] private TMP_InputField inputJoinCode;
-    [SerializeField] private Button buttonJoinByCode;
-    [SerializeField] private TMP_Text textExceptionInformation;
+    // for lobby ui setting
+    private ILobbyUI lobbyUi;
+    private MonoBehaviour lobbyUiMonobehaviour; // for null checking
+    private bool HasUI => lobbyUi != null && lobbyUiMonobehaviour && lobbyUiMonobehaviour.gameObject;
 
-    [Header("Right Panel (Your Session)")]
-    [SerializeField] private GameObject rightPanel;
-    [SerializeField] private TMP_Text textSessionName;
-    [SerializeField] private TMP_Text textSessionCode;
-    [SerializeField] private Button buttonCopyCode;
-    [SerializeField] private TMP_Text textCopied;
-    [SerializeField] private TMP_Text textPlayerCount;
-    [SerializeField] private Button buttonLeave;
-    [SerializeField] private Button buttonReady;
-    [SerializeField] private Button buttonStartGame;
-    [SerializeField] private List<LobbyPlayerSlot> lobbyPlayerSlots;
+    [Header("Game Scene(for transition)")]
+    [SerializeField] string gameSceneName = "Game";
 
     private string MyId => AuthenticationService.Instance.PlayerId;
     private bool IsLobbyHost => joinedLobby != null && joinedLobby.HostId == MyId;
@@ -62,8 +47,9 @@ public class LobbyManager : MonoBehaviour {
     private float heartbeatDelay = 15f;
     private float pollDelay = 1.5f;
 
-    private Coroutine copiedTextCoroutine;
-    private float copiedTextDuratioon = 1.5f;
+    private bool isReadyInFlight = false;
+    private bool isStartInFlight = false;
+    private bool isInGamePhase = false;
 
     private bool isClosingConnection = false;
 
@@ -78,127 +64,103 @@ public class LobbyManager : MonoBehaviour {
     }
 
     private async void Start() {
-        // set panel active
-        leftPanel.SetActive(true);
-        textExceptionInformation.text = "";
-        QuitLobbyUI();
-
-        // set button listener
-        buttonCreateHost.onClick.AddListener(async () => await HostFlow());
-        buttonJoinByCode.onClick.AddListener(async () => await JoinByCodeFlow());
-        buttonLeave.onClick.AddListener(async () => await LeaveFlow());
-        buttonCopyCode.onClick.AddListener(CopyJoinCode);
-
         await EnsureServices();
     }
 
-    private void EnterLobbyUIForHost() {
-        if (joinedLobby == null) {
+    private void OnEnable() {
+        var nm = NetworkManager.Singleton;
+        if (nm != null) {
+            NetworkManager.Singleton.ConnectionApprovalCallback += ApprovalCheck;
+            NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnected;
+        }
+
+        var sm = NetworkManager.Singleton?.SceneManager;
+        if (sm != null) {
+            sm.OnSceneEvent += OnNetworkSceneEvent;
+        }
+    }
+
+    private void OnDisable() {
+        authToClient.Clear();
+        clientToAuth.Clear();
+
+        var nm = NetworkManager.Singleton;
+        if (nm != null) {
+            NetworkManager.Singleton.ConnectionApprovalCallback -= ApprovalCheck;
+            NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnected;
+        }
+
+        var sm = NetworkManager.Singleton?.SceneManager;
+        if (sm != null) {
+            sm.OnSceneEvent -= OnNetworkSceneEvent;
+        }
+    }
+
+    private void OnDestroy() {
+        if (Instance == this) {
+            Instance = null;
+        }
+    }
+
+    public void UI_Attach(ILobbyUI ui, MonoBehaviour asMonobehavior) {
+        lobbyUi = ui;
+        lobbyUiMonobehaviour = asMonobehavior;
+
+        // apply current state
+        lobbyUi.ShowFindSessionPanel(joinedLobby == null);
+        lobbyUi.ShowLobbyPanel(joinedLobby != null);
+        if (joinedLobby != null) {
+
+        }
+    }
+
+    public void UI_Detach(ILobbyUI ui) {
+        if (lobbyUi != ui) {
+            Debug.LogWarning($"DetachUI: ui item don't match; {lobbyUi} != {ui}");
+        }
+        lobbyUi = null;
+        lobbyUiMonobehaviour = null;
+    }
+
+    private void UI_UpdateAll() {
+        if (!HasUI || joinedLobby == null) {
             return;
         }
 
-        leftPanel.SetActive(false);
-        rightPanel.SetActive(true);
-        buttonStartGame.gameObject.SetActive(true);
-        buttonReady.gameObject.SetActive(false);
-        textCopied.gameObject.SetActive(false);
-
-        textSessionName.text = joinedLobby.Name;
-        textSessionCode.text = joinedLobby.LobbyCode;
-
-        UpdatePlayerSlotUI();
+        lobbyUi.SetLobbyHeader(joinedLobby);
+        lobbyUi.RedrawPlayers(joinedLobby, IsLobbyHost);
+        lobbyUi.SetButtons(IsLobbyHost);
     }
 
-    private void EnterLobbyUIForClient() {
-        if (joinedLobby == null) {
-            return;
-        }
-
-        leftPanel.SetActive(false);
-        rightPanel.SetActive(true);
-        buttonReady.gameObject.SetActive(true);
-        buttonStartGame.gameObject.SetActive(false);
-        textCopied.gameObject.SetActive(false);
-
-        textSessionName.text = joinedLobby.Name;
-        textSessionCode.text = joinedLobby.LobbyCode;
-
-        UpdatePlayerSlotUI();
+    // wrapper functions for ui
+    public async Task HostFlow_FromUI(string playerName, string sessionName, int maxPlayers) {
+        await HostFlow_Internal(playerName, sessionName, maxPlayers);
+        // set ui for host
+        lobbyUi.ShowFindSessionPanel(false);
+        lobbyUi.ShowLobbyPanel(true);
+        UI_UpdateAll();
     }
 
-    private void QuitLobbyUI() {
-        leftPanel.SetActive(true);
-        rightPanel.SetActive(false);
-        buttonReady.gameObject.SetActive(false);
-        buttonStartGame.gameObject.SetActive(false);
-        textCopied.gameObject.SetActive(false);
-        foreach (LobbyPlayerSlot slot in lobbyPlayerSlots) {
-            slot.gameObject.SetActive(false);
-        }
+    public async Task JoinByCodeFlow_FromUI(string playerName, string code, Action<string> onError) {
+        await JoinByCodeFlow_Internal(playerName, code, onError);
+        // set ui for client
+        lobbyUi.ShowFindSessionPanel(false);
+        lobbyUi.ShowLobbyPanel(true);
+        UI_UpdateAll();
     }
 
-    private void UpdatePlayerSlotUI() {
-        if (joinedLobby == null) {
-            return;
-        }
-
-        foreach (LobbyPlayerSlot slot in lobbyPlayerSlots) {
-            slot.gameObject.SetActive(false);
-        }
-
-        string hostId = joinedLobby.HostId;
-
-        int slotIndex = 1; // for clients who isn't host (use from second slot)
-
-        foreach (Player player in joinedLobby.Players) {
-            // get player info
-            string playerId = player.Id;
-            string playerName = GetPlayerString(player, "name");
-            bool isPlayerReady = GetPlayerBool(player, "ready");
-            bool canKickedByMe = IsLobbyHost && (playerId != hostId);
-
-            LobbyPlayerSlot slot = null;
-            // if host, use first slot
-            if (playerId == hostId) {
-                slot = lobbyPlayerSlots[0];
-            }
-            // else, use from second slot
-            else {
-                if (slotIndex >= joinedLobby.MaxPlayers) {
-                    Debug.LogWarning($"UpdatePlayerSlotUI: slotIndex is invalid. slotIndex={slotIndex}, maxPlayers={joinedLobby.MaxPlayers}");
-                }
-                else {
-                    slot = lobbyPlayerSlots[slotIndex++];
-                }
-            }
-
-            if (slot != null) {
-                slot.gameObject.SetActive(true);
-
-                slot.SetPlayerId(playerId);
-                slot.SetPlayerName(playerName);
-
-                if (IsLobbyHost && (playerId != hostId)) {
-                    slot.EnableKickButton();
-                }
-
-                slot.Bind(playerId, playerName, isPlayerReady, canKickedByMe, KickPlayer);
-            }
-        }
-
-        textPlayerCount.text = $"({joinedLobby.Players.Count}/{joinedLobby.MaxPlayers})";
-    }
-
-    private void CopyJoinCode() {
-        string code = textSessionCode.text;
+    public void CopyJoinCode_FromUI() {
+        string code = joinedLobby?.LobbyCode;
         if (string.IsNullOrEmpty(code)) {
             return;
         }
-
         GUIUtility.systemCopyBuffer = code;
-
-        copiedTextCoroutine = StartCoroutine(PopCopiedText());
+        lobbyUi.ShowCopiedText();
     }
+    public async Task ToggleReady_FromUI() => await ToggleReady();
+    public async Task StartGame_FromUI() => await StartGame();
+    public async Task LeaveFlow_FromUI() => await LeaveFlow();
+    public void KickPlayer_FromUI(string targetId) => KickPlayer(targetId);
 
     private async Task EnsureServices() {
         await UnityServices.InitializeAsync();
@@ -212,13 +174,154 @@ public class LobbyManager : MonoBehaviour {
         }
     }
 
-    private async Task HostFlow() {
-        try {
-            // get input values
-            string playerName = GetSafeName(inputPlayerName.text, "Player");
-            string sessionName = GetSafeName(inputSessionName.text, "Game");
-            int maxPlayers = int.Parse(dropdownMaxPlayers.options[dropdownMaxPlayers.value].text);
+    public void EnsureApprovalBoundBeforeStart() {
+        var nm = NetworkManager.Singleton;
+        if (!nm) {
+            Debug.LogWarning("EnsureApprovalBoundBeforeStart: No NetworkManager found.");
+            return;
+        }
 
+        nm.ConnectionApprovalCallback -= ApprovalCheck; // prevent redundancy
+        nm.ConnectionApprovalCallback += ApprovalCheck;
+        nm.OnClientDisconnectCallback -= OnClientDisconnected;
+        nm.OnClientDisconnectCallback += OnClientDisconnected;
+    }
+
+    private void ApprovalCheck(NetworkManager.ConnectionApprovalRequest request,
+                               NetworkManager.ConnectionApprovalResponse response) {
+        ulong clientId = request.ClientNetworkId;
+        string authId = Encoding.UTF8.GetString(request.Payload ?? Array.Empty<byte>());
+
+        Debug.Log($"clientId={clientId}; authId={authId}");
+
+        // option: approval check
+        bool ok = !string.IsNullOrEmpty(authId) && !isInGamePhase;
+
+        response.Approved = ok;
+
+        if (ok) {
+            authToClient[authId] = clientId;
+            clientToAuth[clientId] = authId;
+        }
+        else {
+            if (string.IsNullOrEmpty(authId)) {
+                response.Reason = "AuthId is Invalid. (NullOrEmpty)";
+            }
+            else if (isInGamePhase) {
+                response.Reason = "Game is Already Started in this Session.";
+            }
+        }
+
+        response.CreatePlayerObject = false;
+        response.Pending = false;
+    }
+
+    private void OnClientDisconnected(ulong clientId) {
+        var nm = NetworkManager.Singleton;
+        if (!nm) {
+            Debug.LogWarning("OnClientDisconnected: No NetworkManager found.");
+            return;
+        }
+
+        Debug.Log($"clientId={clientId}; localId={nm.LocalClientId}");
+
+        // server-side: cleanup mapping
+        if (nm.IsServer && clientToAuth.TryGetValue(clientId, out string authId)) {
+            clientToAuth.Remove(clientId);
+            authToClient.Remove(authId);
+        }
+        // client-side: disconnect
+        else if (clientId == NetworkManager.ServerClientId || clientId == nm.LocalClientId) {
+            HandleSessionClosed("Disconnected from Server.");
+        }
+    }
+
+    private void OnNetworkSceneEvent(SceneEvent e) {
+        // all client loaded game scene
+        if (e.SceneEventType == SceneEventType.LoadComplete && e.SceneName == gameSceneName) {
+            Debug.Log("OnNetworkSceneEvent: All Clients Loaded the Game Scene.");
+            // only host: round start trigger
+            if (NetworkManager.Singleton.IsServer) {
+                Debug.Log("OnNetworkSceneEvent: As a Host, Start Game.");
+                // 예: RoundManager.Instance.BeginRound();
+            }
+        }
+    }
+
+    private async Task ToggleReady() {
+        if (isReadyInFlight || joinedLobby == null) {
+            return;
+        }
+        isReadyInFlight = true;
+
+        try {
+            Player me = joinedLobby.Players.FirstOrDefault(p => p.Id == MyId);
+            bool isReady = !GetPlayerBool(me, "ready", false); // toggle
+
+            string readyValue = isReady ? "true" : "false";
+            var newPlayerData = new Dictionary<string, PlayerDataObject> {
+                {"ready", new PlayerDataObject(PlayerDataObject.VisibilityOptions.Member, readyValue)},
+            };
+            var updateOption = new UpdatePlayerOptions { Data = newPlayerData };
+            await LobbyService.Instance.UpdatePlayerAsync(joinedLobby.Id, MyId, updateOption);
+        }
+        catch (LobbyServiceException e) {
+            Debug.LogWarning($"ToggleReady: {e.Reason}");
+        }
+        catch (Exception e) {
+            Debug.LogWarning($"ToggleReady: {e}");
+        }
+        finally {
+            isReadyInFlight = false;
+            await RefreshLobby();
+        }
+    }
+
+    private async Task StartGame() {
+        if (!IsLobbyHost || isStartInFlight || joinedLobby == null) {
+            return;
+        }
+        if (!joinedLobby.Players.All(p => (p.Id == joinedLobby.HostId) || GetPlayerBool(p, "ready", false))) {
+            Debug.Log("StartGame: all players need to be ready");
+            return;
+        }
+
+        isStartInFlight = true;
+        try {
+            // update lobby state()
+            var newLobbyData = new Dictionary<string, DataObject> {
+                {"state", new DataObject(DataObject.VisibilityOptions.Public, "ingame")}
+            };
+            var updateOption = new UpdateLobbyOptions {
+                IsLocked = true,
+                Data = newLobbyData
+            };
+            await LobbyService.Instance.UpdateLobbyAsync(joinedLobby.Id, updateOption);
+
+            NetworkSceneManager sceneManager = NetworkManager.Singleton.SceneManager;
+            if (sceneManager == null) {
+                Debug.LogError("NetworkSceneManager is null. Check Enable Scene Management.");
+                return;
+            }
+
+            sceneManager.LoadScene(gameSceneName, LoadSceneMode.Single);
+
+            // to decline later-join request
+            isInGamePhase = true;
+        }
+        catch (LobbyServiceException e) {
+            Debug.LogWarning($"StartGame: {e.Reason}");
+        }
+        catch (Exception e) {
+            Debug.LogWarning($"StartGame: {e}");
+        }
+        finally {
+            isStartInFlight = false;
+        }
+    }
+
+    private async Task HostFlow_Internal(string playerName, string sessionName, int maxPlayers) {
+        try {
             // create relay allocation
             Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxPlayers - 1);
             relayCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
@@ -226,14 +329,14 @@ public class LobbyManager : MonoBehaviour {
             Debug.Log($"Relay created. Code={relayCode}");
 
             // set relay to transport
-            UnityTransport utp = NetworkManager.Singleton.GetComponent<UnityTransport>();
+            var utp = NetworkManager.Singleton.GetComponent<UnityTransport>();
             RelayServerData relayServerData = AllocationUtils.ToRelayServerData(allocation, "dtls");
             utp.SetRelayServerData(relayServerData);
 
             // set player, lobby data and lobby option
             var playerData = new Dictionary<string, PlayerDataObject> {
                 {"name",  new PlayerDataObject(PlayerDataObject.VisibilityOptions.Public, playerName)},
-                {"ready", new PlayerDataObject(PlayerDataObject.VisibilityOptions.Public, "true")} // host는 언제나 ready 상태
+                {"ready", new PlayerDataObject(PlayerDataObject.VisibilityOptions.Member, "true")} // host는 언제나 ready 상태
             };
 
             // string lobbyName = $"{sessionName}-{UnityEngine.Random.Range(1000, 9999)}";
@@ -243,8 +346,9 @@ public class LobbyManager : MonoBehaviour {
                 {"state", new DataObject(DataObject.VisibilityOptions.Public, "waiting", DataObject.IndexOptions.S2)}
             };
 
-            CreateLobbyOptions createLobbyOptions = new CreateLobbyOptions {
+            var createLobbyOptions = new CreateLobbyOptions {
                 IsPrivate = false,
+                IsLocked = false,
                 Data = lobbyData,
                 Player = new Player(null, null, playerData)
             };
@@ -254,6 +358,7 @@ public class LobbyManager : MonoBehaviour {
             lobbyCode = joinedLobby.LobbyCode;
             Debug.Log($"Created {lobbyName} for {maxPlayers} players");
 
+            EnsureApprovalBoundBeforeStart();
             // start host
             if (!NetworkManager.Singleton.StartHost()) {
                 throw new Exception("StartHost failed");
@@ -263,9 +368,6 @@ public class LobbyManager : MonoBehaviour {
             heartbeatCoroutine = StartCoroutine(Heartbeat());
             pollCoroutine = StartCoroutine(PollLobby());
 
-            // set ui for host
-            EnterLobbyUIForHost();
-
             Debug.Log($"Lobby '{joinedLobby.Name}' created. Code={lobbyCode}");
         }
         catch (Exception e) {
@@ -273,11 +375,8 @@ public class LobbyManager : MonoBehaviour {
         }
     }
 
-    private async Task JoinByCodeFlow() {
+    private async Task JoinByCodeFlow_Internal(string playerName, string code, Action<string> onError) {
         try {
-            // get input values
-            string playerName = GetSafeName(inputPlayerName.text, "Player");
-            var code = inputJoinCode.text?.Trim();
             if (string.IsNullOrEmpty(code)) {
                 Debug.LogWarning("Enter session code.");
                 return;
@@ -286,10 +385,10 @@ public class LobbyManager : MonoBehaviour {
             // set player data, join lobby options
             var playerData = new Dictionary<string, PlayerDataObject> {
                 {"name",  new PlayerDataObject(PlayerDataObject.VisibilityOptions.Public, playerName)},
-                {"ready", new PlayerDataObject(PlayerDataObject.VisibilityOptions.Public, "false")}
+                {"ready", new PlayerDataObject(PlayerDataObject.VisibilityOptions.Member, "false")}
             };
 
-            JoinLobbyByCodeOptions joinOptions = new JoinLobbyByCodeOptions {
+            var joinOptions = new JoinLobbyByCodeOptions {
                 Player = new Player(null, null, playerData)
             };
 
@@ -305,9 +404,13 @@ public class LobbyManager : MonoBehaviour {
             JoinAllocation joinAllocation = await RelayService.Instance.JoinAllocationAsync(relayCode);
 
             // set relay to transport
-            UnityTransport utp = NetworkManager.Singleton.GetComponent<UnityTransport>();
+            var utp = NetworkManager.Singleton.GetComponent<UnityTransport>();
             RelayServerData relayServerData = AllocationUtils.ToRelayServerData(joinAllocation, "dtls");
             utp.SetRelayServerData(relayServerData);
+
+            // send my auth player id to host
+            EnsureApprovalBoundBeforeStart();
+            NetworkManager.Singleton.NetworkConfig.ConnectionData = Encoding.UTF8.GetBytes(MyId);
 
             if (!NetworkManager.Singleton.StartClient()) {
                 throw new Exception("StartClient failed");
@@ -316,28 +419,12 @@ public class LobbyManager : MonoBehaviour {
             // poll coroutine
             pollCoroutine = StartCoroutine(PollLobby());
 
-            // set ui for client
-            EnterLobbyUIForClient();
-
             Debug.Log($"Joined lobby '{lobby.Name}'. Code={code}");
             // Debug.Log($"Your Id = {}");
         }
         catch (LobbyServiceException e) {
             Debug.LogError($"JoinFlow: {e.Reason}");
-            switch (e.Reason) {
-                case LobbyExceptionReason.InvalidJoinCode:
-                    textExceptionInformation.text = "Invalid Format.";
-                    break;
-                case LobbyExceptionReason.LobbyNotFound:
-                    textExceptionInformation.text = "Lobby not Found. Try another code.";
-                    break;
-                case LobbyExceptionReason.LobbyFull:
-                    textExceptionInformation.text = "Lobby is Full.";
-                    break;
-                default:
-                    textExceptionInformation.text = e.Reason.ToString();
-                    break;
-            }
+            onError?.Invoke(e.Reason.ToString());
         }
         catch (Exception e) {
             Debug.LogError($"JoinFlow: {e}");
@@ -397,29 +484,32 @@ public class LobbyManager : MonoBehaviour {
         }
     }
 
-    public async void KickPlayer(string targetPlayerId) {
+    private async void KickPlayer(string targetPlayerId) {
         if (!IsLobbyHost || targetPlayerId == MyId) {
             return;
         }
 
         try {
             // disconnect from relay server
-            if (NetworkManager.Singleton.IsServer) {
+            if (NetworkManager.Singleton && NetworkManager.Singleton.IsServer) {
                 if (authToClient.TryGetValue(targetPlayerId, out var clientId)) {
-                    if (clientId != NetworkManager.Singleton.LocalClientId)
+                    if (clientId != NetworkManager.Singleton.LocalClientId) {
                         NetworkManager.Singleton.DisconnectClient(clientId);
+                    }
                 }
             }
 
             // disconnect from lobby
             await LobbyService.Instance.RemovePlayerAsync(joinedLobby.Id, targetPlayerId);
-            await RefreshLobby();
         }
         catch (LobbyServiceException e) {
             Debug.LogError($"Kick: {e.Reason}");
         }
         catch (Exception e) {
             Debug.LogError($"Kick: Unexpected Exception: {e}");
+        }
+        finally {
+            await RefreshLobby();
         }
     }
 
@@ -433,11 +523,14 @@ public class LobbyManager : MonoBehaviour {
         Debug.Log($"Session Closed: {reason}");
         StopLobbyCoroutines();
 
-        if (NetworkManager.Singleton.IsClient || NetworkManager.Singleton.IsHost) {
+        if (NetworkManager.Singleton && (NetworkManager.Singleton.IsClient || NetworkManager.Singleton.IsHost)) {
             NetworkManager.Singleton.Shutdown();
         }
 
-        QuitLobbyUI();
+        lobbyUi?.ShowFindSessionPanel(true);
+        lobbyUi?.ShowLobbyPanel(false);
+        lobbyUi?.ClearAllSlots();
+
         isClosingConnection = false;
     }
 
@@ -461,16 +554,6 @@ public class LobbyManager : MonoBehaviour {
         }
     }
 
-    private IEnumerator PopCopiedText() {
-        textCopied.gameObject.SetActive(true);
-        yield return new WaitForSecondsRealtime(copiedTextDuratioon);
-
-        textCopied.gameObject.SetActive(false);
-
-        StopCoroutine(copiedTextCoroutine);
-        copiedTextCoroutine = null;
-    }
-
     private async Task RefreshLobby() {
         if (joinedLobby == null || isClosingConnection) {
             return;
@@ -484,7 +567,7 @@ public class LobbyManager : MonoBehaviour {
             }
 
             joinedLobby = refreshedLobby;
-            UpdatePlayerSlotUI();
+            UI_UpdateAll();
 
             pollDelay = 1.5f; // poll succeed: clear backoff
         }
@@ -522,19 +605,14 @@ public class LobbyManager : MonoBehaviour {
         }
     }
 
-    private static string GetSafeName(string name, string fallback) {
-        name = (name ?? "").Trim();
-        return string.IsNullOrEmpty(name) ? $"{fallback}{UnityEngine.Random.Range(1000, 9999)}" : name;
-    }
-
-    static string GetPlayerString(Player player, string key, string fallback = "") {
+    public static string GetPlayerString(Player player, string key, string fallback = "") {
         if (player.Data != null && player.Data.TryGetValue(key, out var v) && !string.IsNullOrEmpty(v.Value)) {
             return v.Value;
         }
         return fallback;
     }
 
-    static bool GetPlayerBool(Player player, string key, bool fallback = false) {
+    public static bool GetPlayerBool(Player player, string key, bool fallback = false) {
         if (player.Data != null && player.Data.TryGetValue(key, out var v)) {
             return v.Value == "true";
         }

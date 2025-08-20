@@ -224,6 +224,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 092fc102faa02364ba3edef5d7f44b3b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  imageSlotPanel: {fileID: 7891103323574672922}
   textPlayerName: {fileID: 4514898474456045789}
   buttonKick: {fileID: 6617843573565456998}
 --- !u!222 &8859632928201558914
