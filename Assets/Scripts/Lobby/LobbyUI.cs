@@ -2,7 +2,6 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 
-using System.Collections.Generic;
 using System.Collections;
 
 using Unity.Services.Lobbies.Models;
@@ -33,7 +32,7 @@ public class LobbyUI : MonoBehaviour, ILobbyUI {
     [SerializeField] private Button buttonReady;
     [SerializeField] private TMP_Text textButtonReady;
     [SerializeField] private Button buttonStartGame;
-    [SerializeField] private List<LobbyPlayerSlot> lobbyPlayerSlots;
+    [SerializeField] private LobbyPlayerSlot[] lobbyPlayerSlots;
 
     // copied text coroutine
     private Coroutine copiedTextCoroutine;

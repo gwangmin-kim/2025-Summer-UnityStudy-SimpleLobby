@@ -423,7 +423,7 @@ GameObject:
   - component: {fileID: 119179634}
   - component: {fileID: 119179635}
   m_Layer: 0
-  m_Name: LobbyUIManager
+  m_Name: LobbyManager
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -1833,6 +1833,7 @@ GameObject:
   - component: {fileID: 531950968}
   - component: {fileID: 531950970}
   - component: {fileID: 531950969}
+  - component: {fileID: 531950971}
   m_Layer: 0
   m_Name: NetworkManager
   m_TagString: Untagged
@@ -1900,7 +1901,7 @@ MonoBehaviour:
   NetworkConfig:
     ProtocolVersion: 0
     NetworkTransport: {fileID: 531950969}
-    PlayerPrefab: {fileID: 0}
+    PlayerPrefab: {fileID: 4274711696911353124, guid: b68b6179df916ab4a9ba0fdd1ad818c8, type: 3}
     Prefabs:
       NetworkPrefabsLists:
       - {fileID: 11400000, guid: 11f31d31c0c645641968e7dfe1933081, type: 2}
@@ -1927,6 +1928,18 @@ MonoBehaviour:
     OldPrefabList: []
   RunInBackground: 1
   LogLevel: 1
+--- !u!114 &531950971
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 531950967}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 009c3182a5bf6ca40b8826a83e0e52d2, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!1001 &546028480
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -7668,7 +7681,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!224 &2112490634
 RectTransform:
   m_ObjectHideFlags: 0
