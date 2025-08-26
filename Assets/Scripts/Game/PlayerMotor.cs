@@ -28,6 +28,10 @@ public class PlayerMotor : NetworkBehaviour {
     private float jumpInverseDuration; // for calculation efficiency
     public float JumpInverseDuration => jumpInverseDuration;
 
+    // for collision detection
+    RaycastHit[] castHits = new RaycastHit[8];
+    Collider[] overlaps = new Collider[8];
+
     private void Awake() {
         stateMachine = GetComponent<PlayerStateMachine>();
 
@@ -146,16 +150,26 @@ public class PlayerMotor : NetworkBehaviour {
     /// </summary>
     private void ResolveOverlaps() {
         GetCapsule(out var p0, out var p1, out var r);
-        Collider[] hits = Physics.OverlapCapsule(p0, p1, r, collisionMask, QueryTriggerInteraction.Ignore);
-        foreach (var hit in hits) {
-            if (hit.attachedRigidbody != null && !hit.attachedRigidbody.isKinematic) continue; // 동적인 건 스킵(상황 따라 조정)
+
+        // (optional) apply skinWidth
+        float radius = Mathf.Max(0f, r - skinWidth);
+
+        int overlapCount = Physics.OverlapCapsuleNonAlloc(
+            p0, p1, radius, overlaps, collisionMask, QueryTriggerInteraction.Ignore);
+
+        for (int i = 0; i < overlapCount; i++) {
+            var col = overlaps[i];
+            if (col == null || IsSelf(col)) {
+                continue;
+            }
+
             if (Physics.ComputePenetration(
                     capsule, capsule.transform.position, capsule.transform.rotation,
-                    hit, hit.transform.position, hit.transform.rotation,
+                    col, col.transform.position, col.transform.rotation,
                     out Vector3 direction, out float distance)) {
                 // 살짝만 밀어냄 (skin 너머로)
-                Vector3 depen = direction * (distance + skinWidth);
-                transform.position += depen;
+                Vector3 delta = direction * (distance + skinWidth);
+                transform.position += delta;
                 // 겹침이 연쇄될 수 있어 1~2회 더 반복하고 싶다면 여기에 루프를 추가
             }
         }
@@ -175,10 +189,9 @@ public class PlayerMotor : NetworkBehaviour {
                 return;
             }
 
-            GetCapsule(out var p0, out var p1, out var r);
             float castDistance = distance + skinWidth;
 
-            if (!Physics.CapsuleCast(p0, p1, r - skinWidth, direction, out RaycastHit hit, castDistance, collisionMask, QueryTriggerInteraction.Ignore)) {
+            if (!CustomCapsuleCast(direction, castDistance, out var hit)) {
                 // no collision
                 transform.position += remaining;
                 return;
@@ -191,6 +204,46 @@ public class PlayerMotor : NetworkBehaviour {
             direction = Vector3.ProjectOnPlane(direction, hit.normal).normalized;
             remaining = distance * direction;
         }
+    }
+
+    bool IsSelf(Collider col) => col.transform.root == transform.root;
+    bool IsSelf(RaycastHit hit) => hit.collider != null && IsSelf(hit.collider);
+
+    /// <summary>
+    /// 현재 이동하려는 지점에 대한 플레이어 또는 환경과의 충돌을 검사
+    /// collisionMask가 Player | Environment로 설정되어 있어야 함
+    /// 플레이어 자기 자신을 제외
+    /// 최대 8개의 충돌 후보군 비교 가능
+    /// </summary>
+    /// <param name="direction"></param>
+    /// <param name="distance"></param>
+    /// <param name="bestHit"></param>
+    /// <returns></returns>
+    private bool CustomCapsuleCast(Vector3 direction, float distance, out RaycastHit bestHit) {
+        bestHit = default;
+        GetCapsule(out var p0, out var p1, out var r);
+
+        // (optional) apply skinWidth
+        float radius = Mathf.Max(0f, r - skinWidth);
+
+        int hitCount = Physics.CapsuleCastNonAlloc(
+            p0, p1, radius, direction, castHits, distance, collisionMask, QueryTriggerInteraction.Ignore);
+
+        // find best hit
+        float bestDistance = float.PositiveInfinity;
+        for (int i = 0; i < hitCount; i++) {
+            var hit = castHits[i];
+            if (IsSelf(hit)) {
+                continue; // except myself
+            }
+
+            if (hit.distance < bestDistance) {
+                bestDistance = hit.distance;
+                bestHit = hit;
+            }
+        }
+
+        return bestDistance < float.PositiveInfinity;
     }
 
     private static float SmoothStep(float t) => t * t * (3f - 2f * t);

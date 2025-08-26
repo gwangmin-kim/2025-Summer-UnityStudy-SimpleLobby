@@ -176,13 +176,12 @@ MonoBehaviour:
   capsule: {fileID: 3059087022746238411}
   collisionMask:
     serializedVersion: 2
-    m_Bits: 128
+    m_Bits: 192
   skinWidth: 0.02
   moveSpeed: 5
   maxSnapTurnDegreePerSec: 720
   jumpDistance: 3
   jumpDuration: 0.3
-  jumpCooldown: 0.5
 --- !u!114 &156684329217192839
 MonoBehaviour:
   m_ObjectHideFlags: 0
