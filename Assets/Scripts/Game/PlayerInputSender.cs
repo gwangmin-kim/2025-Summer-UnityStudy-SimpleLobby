@@ -1,8 +1,8 @@
 using UnityEngine;
 using Unity.Netcode;
 using UnityEngine.InputSystem;
-using UnityEngine.UIElements;
 
+[RequireComponent(typeof(PlayerMotor))]
 public class PlayerInputSender : NetworkBehaviour {
     [SerializeField] private float sendRate = 20f; // 20Hz
     private float sendInterval;

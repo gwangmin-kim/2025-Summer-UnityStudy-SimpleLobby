@@ -18,7 +18,6 @@ using Unity.Services.Lobbies;
 using Unity.Services.Lobbies.Models;
 using System.Linq;
 using UnityEngine.SceneManagement;
-using Unity.VisualScripting;
 
 [DefaultExecutionOrder(-1000)]
 public class LobbyManager : MonoBehaviour {
@@ -134,19 +133,25 @@ public class LobbyManager : MonoBehaviour {
 
     // wrapper functions for ui
     public async Task HostFlow_FromUI(string playerName, string sessionName, int maxPlayers) {
-        await HostFlow_Internal(playerName, sessionName, maxPlayers);
-        // set ui for host
-        lobbyUi.ShowFindSessionPanel(false);
-        lobbyUi.ShowLobbyPanel(true);
-        UI_UpdateAll();
+        bool succeed = await HostFlow_Internal(playerName, sessionName, maxPlayers);
+
+        if (succeed) {
+            // set ui for host
+            lobbyUi.ShowFindSessionPanel(false);
+            lobbyUi.ShowLobbyPanel(true);
+            UI_UpdateAll();
+        }
     }
 
     public async Task JoinByCodeFlow_FromUI(string playerName, string code, Action<string> onError) {
-        await JoinByCodeFlow_Internal(playerName, code, onError);
-        // set ui for client
-        lobbyUi.ShowFindSessionPanel(false);
-        lobbyUi.ShowLobbyPanel(true);
-        UI_UpdateAll();
+        bool succeed = await JoinByCodeFlow_Internal(playerName, code, onError);
+
+        if (succeed) {
+            // set ui for client
+            lobbyUi.ShowFindSessionPanel(false);
+            lobbyUi.ShowLobbyPanel(true);
+            UI_UpdateAll();
+        }
     }
 
     public void CopyJoinCode_FromUI() {
@@ -320,7 +325,7 @@ public class LobbyManager : MonoBehaviour {
         }
     }
 
-    private async Task HostFlow_Internal(string playerName, string sessionName, int maxPlayers) {
+    private async Task<bool> HostFlow_Internal(string playerName, string sessionName, int maxPlayers) {
         try {
             // create relay allocation
             Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxPlayers - 1);
@@ -369,17 +374,19 @@ public class LobbyManager : MonoBehaviour {
             pollCoroutine = StartCoroutine(PollLobby());
 
             Debug.Log($"Lobby '{joinedLobby.Name}' created. Code={lobbyCode}");
+            return true;
         }
         catch (Exception e) {
             Debug.LogError($"HostFlow: {e}");
+            return false;
         }
     }
 
-    private async Task JoinByCodeFlow_Internal(string playerName, string code, Action<string> onError) {
+    private async Task<bool> JoinByCodeFlow_Internal(string playerName, string code, Action<string> onError) {
         try {
             if (string.IsNullOrEmpty(code)) {
                 Debug.LogWarning("Enter session code.");
-                return;
+                return false;
             }
 
             // set player data, join lobby options
@@ -421,13 +428,19 @@ public class LobbyManager : MonoBehaviour {
 
             Debug.Log($"Joined lobby '{lobby.Name}'. Code={code}");
             // Debug.Log($"Your Id = {}");
+
+            return true;
         }
         catch (LobbyServiceException e) {
             Debug.LogError($"JoinFlow: {e.Reason}");
             onError?.Invoke(e.Reason.ToString());
+
+            return false;
         }
         catch (Exception e) {
             Debug.LogError($"JoinFlow: {e}");
+
+            return false;
         }
     }
 
