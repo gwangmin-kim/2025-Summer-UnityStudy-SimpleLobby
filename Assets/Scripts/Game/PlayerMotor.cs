@@ -19,7 +19,9 @@ public class PlayerMotor : NetworkBehaviour {
 
     // caching input
     private Vector2 moveInput;
-    private bool jumpInput;
+    private bool jumpInput = false;
+    private bool closeAttackInput = false;
+    private bool rangedAttackInput = false;
 
     // jump
     private Vector3 jumpPosition;
@@ -31,6 +33,21 @@ public class PlayerMotor : NetworkBehaviour {
     // for collision detection
     RaycastHit[] castHits = new RaycastHit[8];
     Collider[] overlaps = new Collider[8];
+
+    /// <summary>
+    /// 클라이언트가 서버로 보낸 입력을 받아 캐싱
+    /// </summary>
+    /// <param name="command">입력 정보 구조체</param>
+    /// <param name="senderId">클라이언트 Id</param>
+    public void ApplyCommand(PlayerCommand command, ulong senderId) {
+        if (!IsServer || senderId != OwnerClientId) {
+            return;
+        }
+        moveInput = command.Move;
+        jumpInput = (command.Buttons & ButtonBits.JumpDown) != 0;
+        closeAttackInput = (command.Buttons & ButtonBits.CloseAttack) != 0;
+        rangedAttackInput = (command.Buttons & ButtonBits.RangedAttack) != 0;
+    }
 
     private void Awake() {
         stateMachine = GetComponent<PlayerStateMachine>();
@@ -44,17 +61,34 @@ public class PlayerMotor : NetworkBehaviour {
             return;
         }
 
-        // check jump
-        if (jumpInput && stateMachine.TryJump()) {
-            Debug.Log("Jump");
+        // check input (change state)
+        if (rangedAttackInput) {
+            Debug.Log($"[Player{OwnerClientId}] PlayerAttack: RangedAttack");
+            rangedAttackInput = false;
+        }
+        else if (closeAttackInput) {
+            Debug.Log($"[Player{OwnerClientId}] PlayerAttack: CloseAttack");
+            closeAttackInput = false;
+        }
+        else if (jumpInput && stateMachine.TryJump()) {
+            Debug.Log($"[Player{OwnerClientId}] PlayerMotor: Jump");
             InitializeJump();
             jumpInput = false;
         }
-        if (stateMachine.CurrentState == PlayerState.Jump) {
-            JumpPlayer(Time.deltaTime);
-        }
-        else {
-            MovePlayer(Time.deltaTime);
+
+        // move player
+        switch (stateMachine.CurrentState) {
+            case PlayerState.IdleOrMove:
+                MovePlayer(Time.deltaTime);
+                break;
+            case PlayerState.Jump:
+                JumpPlayer(Time.deltaTime);
+                break;
+            case PlayerState.Attack:
+                break;
+
+            default:
+                break;
         }
     }
 
@@ -101,7 +135,7 @@ public class PlayerMotor : NetworkBehaviour {
         // transform.position = jumpPosition + jumpDistance * SmoothStep(t) * jumpDirection;
         var targetPosition = jumpPosition + jumpDistance * SmoothStep(t) * jumpDirection;
         var delta = targetPosition - transform.position;
-        KinematicMove(delta.normalized, delta.magnitude);
+        KinematicMove(delta.normalized, delta.magnitude, 0);
 
         // rotation
         var target = Quaternion.LookRotation(jumpDirection, Vector3.up);
@@ -111,19 +145,6 @@ public class PlayerMotor : NetworkBehaviour {
         if (jumpElapsed >= jumpDuration) {
             stateMachine.EndJump();
         }
-    }
-
-    /// <summary>
-    /// 클라이언트가 서버로 보낸 입력을 받아 캐싱
-    /// </summary>
-    /// <param name="command">입력 정보 구조체</param>
-    /// <param name="senderId">클라이언트 Id</param>
-    public void ApplyCommand(PlayerCommand command, ulong senderId) {
-        if (!IsServer || senderId != OwnerClientId) {
-            return;
-        }
-        moveInput = command.Move;
-        jumpInput = (command.Buttons & ButtonBits.JumpDown) != 0;
     }
 
     // helper functions
@@ -181,9 +202,10 @@ public class PlayerMotor : NetworkBehaviour {
     /// </summary>
     /// <param name="direction">이동 방향, 정규화 필요</param>
     /// <param name="distance">이동 거리</param>
-    private void KinematicMove(Vector3 direction, float distance) {
+    /// <param name="slideDepth">미끄러짐 판정 횟수</param>
+    private void KinematicMove(Vector3 direction, float distance, int slideDepth = 2) {
         Vector3 remaining = distance * direction;
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i <= slideDepth; i++) {
             // prevent oscilation
             if (remaining.sqrMagnitude <= 1e-6f) {
                 return;
