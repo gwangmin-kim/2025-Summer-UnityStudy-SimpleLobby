@@ -14,6 +14,10 @@ public class PlayerMotor : NetworkBehaviour {
     [SerializeField] private float jumpDistance = 3f;
     [SerializeField] private float jumpDuration = 0.3f;
     // [SerializeField] private float jumpCooldown = 0.5f;
+    [Header("Close Attack")]
+    [SerializeField] private float closeAttackMoveDistance = 1f; // 휘두르며 이동하는 거리
+    [SerializeField] private float closeAttackValidTime = 0.3f; // 공격 판정이 유효한 시간 (실제 이동 시간)
+    [SerializeField] private float closeAttackDuration = 0.5f; // Idle로 전환되기까지의 시간 (공격 후딜레이에 관여)
 
     private PlayerStateMachine stateMachine;
 
@@ -24,11 +28,16 @@ public class PlayerMotor : NetworkBehaviour {
     private bool rangedAttackInput = false;
 
     // jump
-    private Vector3 jumpPosition;
-    private Vector3 jumpDirection;
-    private float jumpElapsed;
     private float jumpInverseDuration; // for calculation efficiency
     public float JumpInverseDuration => jumpInverseDuration;
+    // close attack
+    private float closeAttackInverseDuration;
+    public float CloseAttackInverseDuration => closeAttackInverseDuration;
+
+
+    private Vector3 cachedPosition;
+    private Vector3 cachedDirection;
+    private float elapsedTime;
 
     // for collision detection
     RaycastHit[] castHits = new RaycastHit[8];
@@ -53,6 +62,7 @@ public class PlayerMotor : NetworkBehaviour {
         stateMachine = GetComponent<PlayerStateMachine>();
 
         jumpInverseDuration = 1f / jumpDuration;
+        closeAttackInverseDuration = 1f / closeAttackValidTime;
     }
 
     // server-side: logical movement
@@ -66,13 +76,15 @@ public class PlayerMotor : NetworkBehaviour {
             Debug.Log($"[Player{OwnerClientId}] PlayerAttack: RangedAttack");
             rangedAttackInput = false;
         }
-        else if (closeAttackInput) {
+        else if (closeAttackInput && stateMachine.TryCloseAttack()) {
             Debug.Log($"[Player{OwnerClientId}] PlayerAttack: CloseAttack");
+            // enable attack effect
+            CacheTransform();
             closeAttackInput = false;
         }
         else if (jumpInput && stateMachine.TryJump()) {
             Debug.Log($"[Player{OwnerClientId}] PlayerMotor: Jump");
-            InitializeJump();
+            CacheTransform();
             jumpInput = false;
         }
 
@@ -85,6 +97,7 @@ public class PlayerMotor : NetworkBehaviour {
                 JumpPlayer(Time.deltaTime);
                 break;
             case PlayerState.Attack:
+                CloseAttackPlayer(Time.deltaTime);
                 break;
 
             default:
@@ -92,20 +105,21 @@ public class PlayerMotor : NetworkBehaviour {
         }
     }
 
-    private void InitializeJump() {
+    private void CacheTransform() {
         if (!IsServer) {
             return;
         }
 
+        // 방향키 입력 기준
         var direction = new Vector3(moveInput.x, 0f, moveInput.y);
         if (direction.sqrMagnitude < 1e-6f) {
             direction = new Vector3(transform.forward.x, 0, transform.forward.z);
             // direction.Normalize(); // transform can't rotate vertically
         }
 
-        jumpPosition = transform.position;
-        jumpDirection = direction;
-        jumpElapsed = 0f;
+        cachedPosition = transform.position;
+        cachedDirection = direction;
+        elapsedTime = 0f;
     }
 
     private void MovePlayer(float deltaTime) {
@@ -130,20 +144,40 @@ public class PlayerMotor : NetworkBehaviour {
     }
 
     private void JumpPlayer(float deltaTime) {
-        jumpElapsed += deltaTime;
-        float t = Mathf.Clamp01(jumpElapsed * jumpInverseDuration);
+        elapsedTime += deltaTime;
+        float t = Mathf.Clamp01(elapsedTime * jumpInverseDuration);
         // transform.position = jumpPosition + jumpDistance * SmoothStep(t) * jumpDirection;
-        var targetPosition = jumpPosition + jumpDistance * SmoothStep(t) * jumpDirection;
+        var targetPosition = cachedPosition + jumpDistance * SmoothStep(t) * cachedDirection;
         var delta = targetPosition - transform.position;
         KinematicMove(delta.normalized, delta.magnitude, 0);
 
         // rotation
-        var target = Quaternion.LookRotation(jumpDirection, Vector3.up);
+        var target = Quaternion.LookRotation(cachedDirection, Vector3.up);
         float maxStep = maxSnapTurnDegreePerSec * deltaTime;
         transform.rotation = Quaternion.RotateTowards(transform.rotation, target, maxStep);
 
-        if (jumpElapsed >= jumpDuration) {
+        if (elapsedTime >= jumpDuration) {
             stateMachine.EndJump();
+        }
+    }
+
+    private void CloseAttackPlayer(float deltaTime) {
+        elapsedTime += deltaTime;
+        float t = Mathf.Clamp01(elapsedTime * closeAttackInverseDuration);
+        var targetPosition = cachedPosition + closeAttackMoveDistance * SmoothStep(t) * cachedDirection;
+        var delta = targetPosition - transform.position;
+        KinematicMove(delta.normalized, delta.magnitude, 0);
+
+        // rotation
+        var target = Quaternion.LookRotation(cachedDirection, Vector3.up);
+        float maxStep = maxSnapTurnDegreePerSec * deltaTime;
+        transform.rotation = Quaternion.RotateTowards(transform.rotation, target, maxStep);
+
+        if (elapsedTime >= closeAttackDuration) {
+            stateMachine.EndCloseAttack();
+        }
+        else if (elapsedTime >= closeAttackValidTime) {
+            // disable attack effect
         }
     }
 

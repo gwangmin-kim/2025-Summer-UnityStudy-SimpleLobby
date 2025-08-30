@@ -1,7 +1,5 @@
 using UnityEngine;
 using Unity.Netcode;
-using Unity.VisualScripting;
-using Unity.Services.Lobbies.Models;
 
 public enum PlayerState {
     IdleOrMove,
@@ -59,7 +57,7 @@ public class PlayerStateMachine : NetworkBehaviour {
         SetState(PlayerState.IdleOrMove);
     }
 
-    public bool TryAttack() {
+    public bool TryCloseAttack() {
         if (!IsServer) {
             return false;
         }
@@ -74,7 +72,7 @@ public class PlayerStateMachine : NetworkBehaviour {
         }
     }
 
-    public void EndAttack() {
+    public void EndCloseAttack() {
         if (!IsServer || CurrentState != PlayerState.Attack) {
             return;
         }
