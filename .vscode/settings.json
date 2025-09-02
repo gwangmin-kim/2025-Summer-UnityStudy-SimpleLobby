@@ -70,5 +70,5 @@
     "explorer.fileNesting.patterns": {
         "*.sln": "*.csproj"
     },
-    "dotnet.defaultSolution": "Multiplayer.sln"
+    "dotnet.defaultSolution": "2025-Summer-UnityStudy-SimpleLobby.sln"
 }
