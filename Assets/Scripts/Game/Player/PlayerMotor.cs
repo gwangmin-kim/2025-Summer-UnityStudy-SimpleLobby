@@ -11,11 +11,11 @@ public class PlayerMotor : NetworkBehaviour {
     [SerializeField] private float moveSpeed = 4f;
     [SerializeField] private float maxSnapTurnDegreePerSec = 720f;
     [Header("Jump")]
-    [SerializeField] private float jumpDistance = 3f;
-    [SerializeField] private float jumpDuration = 0.3f;
-    // [SerializeField] private float jumpCooldown = 0.5f;
+    [SerializeField] private float jumpDistance = 4f;
+    [SerializeField] private float jumpDuration = 0.4f;
+    // [SerializeField] private float jumpCooldown = 0.6f;
     [Header("Close Attack")]
-    [SerializeField] private float closeAttackMoveDistance = 1f; // 휘두르며 이동하는 거리
+    [SerializeField] private float closeAttackMoveDistance = 3f; // 휘두르며 이동하는 거리
     [SerializeField] private float closeAttackValidTime = 0.3f; // 공격 판정이 유효한 시간 (실제 이동 시간)
     [SerializeField] private float closeAttackDuration = 0.5f; // Idle로 전환되기까지의 시간 (공격 후딜레이에 관여)
 
@@ -90,13 +90,14 @@ public class PlayerMotor : NetworkBehaviour {
 
         // move player
         switch (stateMachine.CurrentState) {
-            case PlayerState.IdleOrMove:
+            case PlayerState.Idle:
+            case PlayerState.Move:
                 MovePlayer(Time.deltaTime);
                 break;
             case PlayerState.Jump:
                 JumpPlayer(Time.deltaTime);
                 break;
-            case PlayerState.Attack:
+            case PlayerState.CloseAttack:
                 CloseAttackPlayer(Time.deltaTime);
                 break;
 
@@ -131,6 +132,7 @@ public class PlayerMotor : NetworkBehaviour {
         var direction = new Vector3(moveInput.x, 0f, moveInput.y);
         var distance = moveSpeed * deltaTime;
         KinematicMove(direction, distance);
+        stateMachine.SetMove(direction.sqrMagnitude > 0f);
         // var delta = moveSpeed * deltaTime * direction;
         // transform.position += delta;
 
@@ -157,7 +159,7 @@ public class PlayerMotor : NetworkBehaviour {
         transform.rotation = Quaternion.RotateTowards(transform.rotation, target, maxStep);
 
         if (elapsedTime >= jumpDuration) {
-            stateMachine.EndJump();
+            stateMachine.EndJump(moveInput.sqrMagnitude > 0f);
         }
     }
 
@@ -174,7 +176,7 @@ public class PlayerMotor : NetworkBehaviour {
         transform.rotation = Quaternion.RotateTowards(transform.rotation, target, maxStep);
 
         if (elapsedTime >= closeAttackDuration) {
-            stateMachine.EndCloseAttack();
+            stateMachine.EndCloseAttack(moveInput.sqrMagnitude > 0f);
         }
         else if (elapsedTime >= closeAttackValidTime) {
             // disable attack effect
