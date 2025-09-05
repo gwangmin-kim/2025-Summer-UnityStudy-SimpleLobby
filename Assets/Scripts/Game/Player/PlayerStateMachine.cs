@@ -1,5 +1,6 @@
 using UnityEngine;
 using Unity.Netcode;
+using UnityEditor.XR;
 
 public enum PlayerState {
     Idle,
@@ -43,7 +44,7 @@ public class PlayerStateMachine : NetworkBehaviour {
             StartServerTime = NetworkManager.ServerTime.Time,
         };
 
-        Debug.Log($"[Player{OwnerClientId}] SetState: from {CurrentState} to {newState}; seq = {currentSeq}");
+        // Debug.Log($"[Player{OwnerClientId}] SetState: from {CurrentState} to {newState}; seq = {currentSeq}");
     }
 
     public void SetMove(bool isMoving) {
@@ -103,5 +104,9 @@ public class PlayerStateMachine : NetworkBehaviour {
 
         // SetState(PlayerState.Idle);
         SetMove(isMoving);
+    }
+
+    public bool TryRangedAttack() {
+        return true;
     }
 }

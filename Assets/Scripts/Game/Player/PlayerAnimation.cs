@@ -18,8 +18,8 @@ public static class AnimatorParameters {
 }
 
 [RequireComponent(typeof(PlayerStateMachine))]
-[RequireComponent(typeof(PlayerMotor))]
 [RequireComponent(typeof(Animator))]
+// [RequireComponent(typeof(PlayerMotor))]
 public class PlayerAnimation : NetworkBehaviour {
     Animator animator;
 
@@ -28,18 +28,19 @@ public class PlayerAnimation : NetworkBehaviour {
 
     [Header("Animation")]
     [SerializeField] private float fadeTime = 0.08f;
-    [Header("Jump")]
-    [SerializeField] private float jumpVisualHeight = 1f;
+
+    // [Header("Jump")]
+    // [SerializeField] private float jumpVisualHeight = 1f;
 
     private PlayerStateMachine stateMachine;
     private StatePacket cachedState;
 
-    private PlayerMotor motor;
+    // private PlayerMotor motor;
 
     private void Awake() {
         animator = GetComponent<Animator>();
         stateMachine = GetComponent<PlayerStateMachine>();
-        motor = GetComponent<PlayerMotor>();
+        // motor = GetComponent<PlayerMotor>();
     }
 
     // client-side: visual movement
@@ -82,7 +83,7 @@ public class PlayerAnimation : NetworkBehaviour {
     }
 
     // helper function: detect state changes
-    private static bool IsStateChanged(StatePacket cached, StatePacket current) => cached.seq < current.seq;
+    private static bool IsStateChanged(StatePacket cached, StatePacket current) => cached.seq != current.seq;
 
     // helper function: parameterized curves
     // private float JumpHeight(float t) => jumpVisualHeight * 4f * t * (1f - t);

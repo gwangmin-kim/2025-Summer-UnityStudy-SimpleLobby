@@ -1,7 +1,15 @@
 using UnityEngine;
 using Unity.Netcode;
+using Unity.VisualScripting;
+using TMPro;
 
+// ! 현재 이동 및 공격 -> 모든 플레이어의 행동 로직을 여기에서 담당 중
+// ! 이전에는 PlayerAttack 클래스를 따로 두어 근/원거리 공격에 대한 동작을 여기에서 수행하고자 했음
+// ! 클래스를 분리하더라도 의존성이 심해질 것 같아 우선 하나의 클래스에서 전부 구현하기로 함
+// ! (근거리 공격의 경우, 전방으로 이동 + 공격 판정이 동시에 존재해서 두 로직을 분리 시에 불필요한 동일 연산이 반복됨)
+// ! 단, 공격 판정 로직 자체는 별도의 클래스에 구현해두고, 이를 호출하는 방식으로 하기로 함(일종의 라이브러리 같은 느낌)
 [RequireComponent(typeof(PlayerStateMachine))]
+[RequireComponent(typeof(PlayerAttack))]
 public class PlayerMotor : NetworkBehaviour {
     [Header("Collision")]
     [SerializeField] private CapsuleCollider capsule;
@@ -16,10 +24,12 @@ public class PlayerMotor : NetworkBehaviour {
     // [SerializeField] private float jumpCooldown = 0.6f;
     [Header("Close Attack")]
     [SerializeField] private float closeAttackMoveDistance = 3f; // 휘두르며 이동하는 거리
-    [SerializeField] private float closeAttackValidTime = 0.3f; // 공격 판정이 유효한 시간 (실제 이동 시간)
+    [SerializeField] private float closeAttackMoveTime = 0.3f; // 공격 모션과 함께 실제 이동하는 시간
     [SerializeField] private float closeAttackDuration = 0.5f; // Idle로 전환되기까지의 시간 (공격 후딜레이에 관여)
+    [SerializeField] private Vector2 closeAttackValidRange = new Vector2(0.1f, 0.3f); // 공격 판정을 발동할 시간 (시작 시점, 종료 시점)
 
     private PlayerStateMachine stateMachine;
+    private PlayerAttack playerAttack;
 
     // caching input
     private Vector2 moveInput;
@@ -29,19 +39,16 @@ public class PlayerMotor : NetworkBehaviour {
 
     // jump
     private float jumpInverseDuration; // for calculation efficiency
-    public float JumpInverseDuration => jumpInverseDuration;
     // close attack
     private float closeAttackInverseDuration;
-    public float CloseAttackInverseDuration => closeAttackInverseDuration;
-
 
     private Vector3 cachedPosition;
     private Vector3 cachedDirection;
-    private float elapsedTime;
+    private float elapsedTime = 0f;
 
     // for collision detection
-    RaycastHit[] castHits = new RaycastHit[8];
-    Collider[] overlaps = new Collider[8];
+    private readonly RaycastHit[] castHits = new RaycastHit[8];
+    private readonly Collider[] overlaps = new Collider[8];
 
     /// <summary>
     /// 클라이언트가 서버로 보낸 입력을 받아 캐싱
@@ -60,9 +67,16 @@ public class PlayerMotor : NetworkBehaviour {
 
     private void Awake() {
         stateMachine = GetComponent<PlayerStateMachine>();
+        playerAttack = GetComponent<PlayerAttack>();
+    }
+
+    private void Start() {
+        if (!IsServer) {
+            return;
+        }
 
         jumpInverseDuration = 1f / jumpDuration;
-        closeAttackInverseDuration = 1f / closeAttackValidTime;
+        closeAttackInverseDuration = 1f / closeAttackMoveTime;
     }
 
     // server-side: logical movement
@@ -72,18 +86,18 @@ public class PlayerMotor : NetworkBehaviour {
         }
 
         // check input (change state)
-        if (rangedAttackInput) {
-            Debug.Log($"[Player{OwnerClientId}] PlayerAttack: RangedAttack");
+        if (rangedAttackInput && stateMachine.TryRangedAttack()) {
+            // Debug.Log($"[Player{OwnerClientId}] PlayerAttack: RangedAttack");
             rangedAttackInput = false;
         }
         else if (closeAttackInput && stateMachine.TryCloseAttack()) {
-            Debug.Log($"[Player{OwnerClientId}] PlayerAttack: CloseAttack");
-            // enable attack effect
+            // Debug.Log($"[Player{OwnerClientId}] PlayerAttack: CloseAttack");
             CacheTransform();
+            playerAttack.InitCloseAttack();
             closeAttackInput = false;
         }
         else if (jumpInput && stateMachine.TryJump()) {
-            Debug.Log($"[Player{OwnerClientId}] PlayerMotor: Jump");
+            // Debug.Log($"[Player{OwnerClientId}] PlayerMotor: Jump");
             CacheTransform();
             jumpInput = false;
         }
@@ -106,7 +120,7 @@ public class PlayerMotor : NetworkBehaviour {
         }
     }
 
-    private void CacheTransform() {
+    private void CacheTransform(bool towardMouse = false) {
         if (!IsServer) {
             return;
         }
@@ -128,6 +142,8 @@ public class PlayerMotor : NetworkBehaviour {
             return;
         }
 
+        ResolveOverlaps();
+
         // translation
         var direction = new Vector3(moveInput.x, 0f, moveInput.y);
         var distance = moveSpeed * deltaTime;
@@ -146,6 +162,10 @@ public class PlayerMotor : NetworkBehaviour {
     }
 
     private void JumpPlayer(float deltaTime) {
+        if (!IsServer) {
+            return;
+        }
+
         elapsedTime += deltaTime;
         float t = Mathf.Clamp01(elapsedTime * jumpInverseDuration);
         // transform.position = jumpPosition + jumpDistance * SmoothStep(t) * jumpDirection;
@@ -164,6 +184,10 @@ public class PlayerMotor : NetworkBehaviour {
     }
 
     private void CloseAttackPlayer(float deltaTime) {
+        if (!IsServer) {
+            return;
+        }
+
         elapsedTime += deltaTime;
         float t = Mathf.Clamp01(elapsedTime * closeAttackInverseDuration);
         var targetPosition = cachedPosition + closeAttackMoveDistance * SmoothStep(t) * cachedDirection;
@@ -176,10 +200,12 @@ public class PlayerMotor : NetworkBehaviour {
         transform.rotation = Quaternion.RotateTowards(transform.rotation, target, maxStep);
 
         if (elapsedTime >= closeAttackDuration) {
+            // exit state
             stateMachine.EndCloseAttack(moveInput.sqrMagnitude > 0f);
         }
-        else if (elapsedTime >= closeAttackValidTime) {
-            // disable attack effect
+        else if (elapsedTime >= closeAttackValidRange.x && elapsedTime < closeAttackValidRange.y) {
+            // ? 호출 횟수를 줄여도 될 것 같음 (매프레임은 다소 과할 수 있음)
+            playerAttack.CloseAttack();
         }
     }
 
@@ -187,26 +213,29 @@ public class PlayerMotor : NetworkBehaviour {
     /// <summary>
     /// 캡슐 콜라이더의 월드 좌표 계산
     /// </summary>
+    /// <param name="capsule">계산할 캡슐 콜라이더</param>
     /// <param name="p0">위쪽 구 중심</param>
     /// <param name="p1">아래쪽 구 중심</param>
     /// <param name="radius">반지름</param>
-    private void GetCapsule(out Vector3 p0, out Vector3 p1, out float radius) {
-        Transform tr = capsule.transform;
-        Vector3 c = tr.TransformPoint(capsule.center);
-        float height = Mathf.Max(capsule.height * Mathf.Abs(tr.lossyScale.y), capsule.radius * 2f);
-        radius = capsule.radius * Mathf.Max(Mathf.Abs(tr.lossyScale.x), Mathf.Abs(tr.lossyScale.z));
+    // private static void GetCapsule(CapsuleCollider capsule, out Vector3 p0, out Vector3 p1, out float radius) {
+    //     Transform tr = capsule.transform;
+    //     Vector3 c = tr.TransformPoint(capsule.center);
+    //     float height = Mathf.Max(capsule.height * Mathf.Abs(tr.lossyScale.y), capsule.radius * 2f);
+    //     radius = capsule.radius * Mathf.Max(Mathf.Abs(tr.lossyScale.x), Mathf.Abs(tr.lossyScale.z));
 
-        float half = (height * 0.5f) - radius;
-        Vector3 up = tr.up;
-        p0 = c + up * half;
-        p1 = c - up * half;
-    }
+    //     float half = (height * 0.5f) - radius;
+    //     Vector3 up = tr.up;
+    //     p0 = c + up * half;
+    //     p1 = c - up * half;
+    // }
 
     /// <summary>
     /// 환경과 플레이어가 겹치는 상황에서 탈출
     /// </summary>
     private void ResolveOverlaps() {
-        GetCapsule(out var p0, out var p1, out var r);
+        if (!capsule.TryGetCapsuleWorld(out var p0, out var p1, out var r)) {
+            return;
+        }
 
         // (optional) apply skinWidth
         float radius = Mathf.Max(0f, r - skinWidth);
@@ -228,6 +257,7 @@ public class PlayerMotor : NetworkBehaviour {
                 Vector3 delta = direction * (distance + skinWidth);
                 transform.position += delta;
                 // 겹침이 연쇄될 수 있어 1~2회 더 반복하고 싶다면 여기에 루프를 추가
+                // TODO: y좌표를 움직이지 않고 겹침에서 빠져나와야 함
             }
         }
     }
@@ -264,6 +294,7 @@ public class PlayerMotor : NetworkBehaviour {
         }
     }
 
+    // helper functions
     bool IsSelf(Collider col) => col.transform.root == transform.root;
     bool IsSelf(RaycastHit hit) => hit.collider != null && IsSelf(hit.collider);
 
@@ -279,7 +310,10 @@ public class PlayerMotor : NetworkBehaviour {
     /// <returns></returns>
     private bool CustomCapsuleCast(Vector3 direction, float distance, out RaycastHit bestHit) {
         bestHit = default;
-        GetCapsule(out var p0, out var p1, out var r);
+        // GetCapsule(capsule, out var p0, out var p1, out var r);
+        if (!capsule.TryGetCapsuleWorld(out var p0, out var p1, out var r)) {
+            return false;
+        }
 
         // (optional) apply skinWidth
         float radius = Mathf.Max(0f, r - skinWidth);
