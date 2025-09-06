@@ -1,7 +1,5 @@
 using UnityEngine;
 using Unity.Netcode;
-using Unity.VisualScripting;
-using TMPro;
 
 // ! 현재 이동 및 공격 -> 모든 플레이어의 행동 로직을 여기에서 담당 중
 // ! 이전에는 PlayerAttack 클래스를 따로 두어 근/원거리 공격에 대한 동작을 여기에서 수행하고자 했음
@@ -50,6 +48,9 @@ public class PlayerMotor : NetworkBehaviour {
     private readonly RaycastHit[] castHits = new RaycastHit[8];
     private readonly Collider[] overlaps = new Collider[8];
 
+    // lock vertical position
+    private float fixedY;
+
     /// <summary>
     /// 클라이언트가 서버로 보낸 입력을 받아 캐싱
     /// </summary>
@@ -75,6 +76,7 @@ public class PlayerMotor : NetworkBehaviour {
             return;
         }
 
+        fixedY = transform.position.y;
         jumpInverseDuration = 1f / jumpDuration;
         closeAttackInverseDuration = 1f / closeAttackMoveTime;
     }
@@ -229,6 +231,12 @@ public class PlayerMotor : NetworkBehaviour {
     //     p1 = c - up * half;
     // }
 
+    // helper function
+    private void FixTransformY() {
+        var currentPosition = transform.position;
+        transform.position = new Vector3(currentPosition.x, fixedY, currentPosition.z);
+    }
+
     /// <summary>
     /// 환경과 플레이어가 겹치는 상황에서 탈출
     /// </summary>
@@ -253,13 +261,16 @@ public class PlayerMotor : NetworkBehaviour {
                     capsule, capsule.transform.position, capsule.transform.rotation,
                     col, col.transform.position, col.transform.rotation,
                     out Vector3 direction, out float distance)) {
+                // 수직 좌표 고정
+                direction.y = 0f;
                 // 살짝만 밀어냄 (skin 너머로)
                 Vector3 delta = direction * (distance + skinWidth);
                 transform.position += delta;
                 // 겹침이 연쇄될 수 있어 1~2회 더 반복하고 싶다면 여기에 루프를 추가
-                // TODO: y좌표를 움직이지 않고 겹침에서 빠져나와야 함
             }
         }
+
+        FixTransformY();
     }
 
     /// <summary>
@@ -292,6 +303,8 @@ public class PlayerMotor : NetworkBehaviour {
             direction = Vector3.ProjectOnPlane(direction, hit.normal).normalized;
             remaining = distance * direction;
         }
+
+        // FixTransformY();
     }
 
     // helper functions
