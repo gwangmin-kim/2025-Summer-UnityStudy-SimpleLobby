@@ -31,6 +31,7 @@ public class PlayerMotor : NetworkBehaviour {
 
     // caching input
     private Vector2 moveInput;
+    private Vector2 aimInput;
     private bool jumpInput = false;
     private bool closeAttackInput = false;
     private bool rangedAttackInput = false;
@@ -61,6 +62,7 @@ public class PlayerMotor : NetworkBehaviour {
             return;
         }
         moveInput = command.Move;
+        aimInput = command.Aim;
         jumpInput = (command.Buttons & ButtonBits.JumpDown) != 0;
         closeAttackInput = (command.Buttons & ButtonBits.CloseAttack) != 0;
         rangedAttackInput = (command.Buttons & ButtonBits.RangedAttack) != 0;
@@ -94,7 +96,7 @@ public class PlayerMotor : NetworkBehaviour {
         }
         else if (closeAttackInput && stateMachine.TryCloseAttack()) {
             // Debug.Log($"[Player{OwnerClientId}] PlayerAttack: CloseAttack");
-            CacheTransform();
+            CacheTransform(true);
             playerAttack.InitCloseAttack();
             closeAttackInput = false;
         }
@@ -128,7 +130,7 @@ public class PlayerMotor : NetworkBehaviour {
         }
 
         // 방향키 입력 기준
-        var direction = new Vector3(moveInput.x, 0f, moveInput.y);
+        var direction = towardMouse ? new Vector3(aimInput.x, 0f, aimInput.y) : new Vector3(moveInput.x, 0f, moveInput.y);
         if (direction.sqrMagnitude < 1e-6f) {
             direction = new Vector3(transform.forward.x, 0, transform.forward.z);
             // direction.Normalize(); // transform can't rotate vertically

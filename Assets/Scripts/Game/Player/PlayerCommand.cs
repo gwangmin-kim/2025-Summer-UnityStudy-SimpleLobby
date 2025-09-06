@@ -14,12 +14,14 @@ public enum ButtonBits : byte {
 }
 
 public struct PlayerCommand : INetworkSerializable {
-    public Vector2 Move; // WASD, Hold
-    public ButtonBits Buttons;
+    public Vector2 Move; // WASD 이동 입력, 홀드
+    public Vector2 Aim; // 마우스/패드 조준 방향 (XZ평면, 정규화)
+    public ButtonBits Buttons; // 단발성 입력들 비트플래그
     public uint Seq; // 순서(나중에 보정/중복 제거에 유용)
 
     public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter {
         serializer.SerializeValue(ref Move);
+        serializer.SerializeValue(ref Aim);
         serializer.SerializeValue(ref Buttons);
         serializer.SerializeValue(ref Seq);
     }
