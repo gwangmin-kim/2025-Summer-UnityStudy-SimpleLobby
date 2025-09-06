@@ -156,13 +156,16 @@ public class PlayerMotor : NetworkBehaviour {
         // var delta = moveSpeed * deltaTime * direction;
         // transform.position += delta;
 
-
         // rotation
-        if (direction.sqrMagnitude > 0f) {
-            var target = Quaternion.LookRotation(direction, Vector3.up);
-            float maxStep = maxSnapTurnDegreePerSec * deltaTime;
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, target, maxStep);
-        }
+        // if (direction.sqrMagnitude > 0f) {
+        //     var target = Quaternion.LookRotation(direction, Vector3.up);
+        //     float maxStep = maxSnapTurnDegreePerSec * deltaTime;
+        //     transform.rotation = Quaternion.RotateTowards(transform.rotation, target, maxStep);
+        // }
+        Vector3 lookDirection = direction.sqrMagnitude > 0f ? direction : new Vector3(aimInput.x, 0f, aimInput.y);
+        var target = Quaternion.LookRotation(lookDirection, Vector3.up);
+        float maxStep = maxSnapTurnDegreePerSec * deltaTime;
+        transform.rotation = Quaternion.RotateTowards(transform.rotation, target, maxStep);
     }
 
     private void JumpPlayer(float deltaTime) {
